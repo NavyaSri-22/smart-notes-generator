@@ -4,15 +4,7 @@ import pandas as pd
 from pypdf import PdfReader
 from youtube_transcript_api import YouTubeTranscriptApi
 from streamlit_mic_recorder import speech_to_text
-from google import genai
-
-# ==========================================
-# 🔑 SECURITY: ADD YOUR BACKUP API KEYS HERE
-# ==========================================
-GEMINI_API_KEYS = [
-    "api key"
-    "api key"
-] 
+import google.generativeai as genai
 
 # --- CONFIGURATION & PREMIUM UI SETUP ---
 st.set_page_config(page_title="Smart Notes Engine", page_icon="📝", layout="wide")
@@ -34,20 +26,30 @@ if "history" not in st.session_state:
 if "current_note" not in st.session_state:
     st.session_state.current_note = None
 
+# =========================================================================
+# 🔑 ENTER YOUR API KEY HERE
+# Put your real Gemini API key between the quotes below!
+# =========================================================================
+MY_API_KEY = "YOUR_REAL_GEMINI_API_KEY_HERE"
+
 # --- ROTATING ENGINE EXECUTION FUNCTION ---
 def call_gemini_with_failover(prompt):
-    valid_keys = [k for k in GEMINI_API_KEYS if k and "YOUR_" not in k and len(k) > 10]
-    if not valid_keys:
-        raise ValueError("Missing API Keys! Please fill out the API keys roster array on Line 12.")
-    
-    for current_key in valid_keys:
-        try:
-            client = genai.Client(api_key=current_key)
-            response = client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
-            return response.text
-        except Exception:
-            continue
-    raise RuntimeError("All configured API Keys failed or ran out of quota limits simultaneously.")
+    # Check if a key is provided in Streamlit Cloud Secrets first, otherwise use the variable above
+    final_key = MY_API_KEY
+    if "GEMINI_KEY_1" in st.secrets:
+        final_key = st.secrets["GEMINI_KEY_1"]
+        
+    if not final_key or "YOUR_" in final_key:
+        raise ValueError("Missing API Key! Please paste your Gemini API key into the code on Line 31.")
+        
+    try:
+        # Standard configuration syntax that works everywhere
+        genai.configure(api_key=final_key)
+        model = genai.GenerativeModel('gemini-pro')  # Stable, reliable fallback model
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        raise RuntimeError(f"Gemini API Error: {str(e)}")
 
 # --- DATA EXTRACTION UTILITIES ---
 def extract_youtube_transcript(url):
@@ -84,8 +86,6 @@ with st.sidebar:
             if st.button(button_label, key=f"hist_{real_idx}"):
                 st.session_state.current_note = real_idx
                 st.rerun()
-    st.markdown("---")
-    st.caption("Project Build v11.2 • Strict Data Splitter")
 
 # --- MAIN WORKSPACE MULTIPLEXER ---
 if st.session_state.current_note is not None and st.session_state.current_note < len(st.session_state.history):
@@ -104,63 +104,7 @@ if st.session_state.current_note is not None and st.session_state.current_note <
             
     st.markdown("---")
     
-    # --- INTERACTIVE DIAGRAMS ---
-    dot_code = st.session_state.history[idx].get('flowchart', '').strip()
-    chart_data = st.session_state.history[idx].get('metrics', [])
-    
-    if dot_code or chart_data:
-        st.subheader("📊 Interactive Diagram Charts")
-        viz_col1, viz_col2 = st.columns(2)
-        
-        with viz_col1:
-            if dot_code and "digraph" in dot_code:
-                st.markdown("**Generated Process Flow Chart**")
-                try:
-                    st.graphviz_chart(dot_code)
-                except Exception:
-                    st.caption("Flowchart structural layout error.")
-                    
-        with viz_col2:
-            if chart_data and len(chart_data) > 0:
-                st.markdown("**Metric Metrics Breakdown**")
-                try:
-                    df = pd.DataFrame(chart_data)
-                    st.bar_chart(df.set_index("Label"))
-                except Exception:
-                    st.caption("Data matrices chart error.")
-        st.markdown("---")
-    
-    # --- REFINEMENT PANEL ---
-    st.subheader("🛠️ Refinement Action Panel")
-    ctrl_col1, ctrl_col2 = st.columns(2)
-    
-    with ctrl_col1:
-        st.markdown("**Modify Study Content Format**")
-        new_format_choice = st.selectbox("Select New Content Style:", ["Bullet Points", "Detailed Paragraphs", "Flashcards (Concept & Definition Pairs)", "Short Notes Summary"], key="ref_format_selector")
-        if st.button("📝 Update & Refine Notes"):
-            with st.spinner("🧠 AI rewriting notes..."):
-                try:
-                    note_prompt = f"Rewrite this material strictly into this requested format: '{new_format_choice}'. Use clear markdown. Material:\n{st.session_state.history[idx]['notes']}"
-                    st.session_state.history[idx]['notes'] = call_gemini_with_failover(note_prompt)
-                    st.rerun()
-                except Exception as e:
-                    st.error(str(e))
-                    
-    with ctrl_col2:
-        st.markdown("**Generate Brand New Practice Questions**")
-        regen_count = st.slider("Select Fresh Question Count:", 3, 15, 5, key="regen_count_slider")
-        if st.button("❓ Generate New Questions"):
-            with st.spinner("🧠 AI writing unique questions..."):
-                try:
-                    qs_prompt = f"Generate exactly {regen_count} brand-new questions without duplicating these: {st.session_state.history[idx]['questions']}\nNotes:\n{st.session_state.history[idx]['notes']}"
-                    st.session_state.history[idx]['questions'] = call_gemini_with_failover(qs_prompt)
-                    st.rerun()
-                except Exception as e:
-                    st.error(str(e))
-                    
-    st.markdown("---")
-    
-    # --- TEXT INPUT / CONTENT DISPLAY FIELDS (STRICT SEPARATION) ---
+    # --- DISPLAY PANELS (NOTES & QUESTIONS ISOLATED) ---
     st.markdown('<div class="content-block">', unsafe_allow_html=True)
     st.subheader("📝 Generated Study Content (Editable)")
     edited_notes = st.text_area("Modify summaries text:", value=st.session_state.history[idx]['notes'], height=250, key="edit_notes_field")
@@ -180,11 +124,9 @@ else:
 
     h_col1, h_col2 = st.columns(2)
     with h_col1:
-        note_format = st.selectbox("Preferred Output Format", ["Bullet Points", "Detailed Paragraphs", "Flashcards (Concept & Definition Pairs)", "Mindmap Structure"])
+        note_format = st.selectbox("Preferred Output Format", ["Bullet Points", "Detailed Paragraphs", "Flashcards (Concept & Definition Pairs)"])
     with h_col2:
         num_questions = st.slider("Number of Exam Questions", 3, 10, 5)
-
-    enable_diagrams = st.checkbox("🎨 Generate Visual Charts & Diagrams (Uses more API Quota)", value=False)
 
     st.markdown("---")
     input_type = st.radio("Select Input Source:", ["Raw Text", "Voice Notes 🎙️", "YouTube Link", "PDF Document", "Word Document (.docx)"], horizontal=True)
@@ -223,7 +165,6 @@ else:
         else:
             with st.spinner("🧠 Processing your structured segments..."):
                 try:
-                    # Explicit layout wrapping tags are enforced every time now to fix the splitting bug
                     pipeline_prompt = f"""
                     You are an academic systems assistant. Analyze the source text and split your response into explicit tag sections.
                     
@@ -234,29 +175,16 @@ else:
                     [QUESTIONS_BLOCK]
                     Generate exactly {num_questions} clear exam practice questions. Place the direct answer key text immediately beneath each generated question item.
                     [/QUESTIONS_BLOCK]
-                    """
                     
-                    if enable_diagrams:
-                        pipeline_prompt += """
-                        [FLOWCHART_BLOCK]
-                        Create a valid Graphviz layout code block mapping the process steps or timelines. Start with 'digraph G {' and close with '}'. Do NOT wrap in backticks.
-                        [/FLOWCHART_BLOCK]
-                        
-                        [METRICS_BLOCK]
-                        If there are values, output them strictly as a simple list formatted as Label:Value separated by commas. If none are found, write None.
-                        [/METRICS_BLOCK]
-                        """
-                        
-                    pipeline_prompt += f"\n\nSource Material:\n{raw_text[:12000]}"
+                    Source Material:
+                    {raw_text[:12000]}
+                    """
                     
                     ai_response = call_gemini_with_failover(pipeline_prompt)
                     st.balloons()
                     
-                    # Safe explicit tag extract block
                     text_notes = "No notes compiled."
                     text_qs = "No questions compiled."
-                    flow_part = ""
-                    metrics_list = []
                     
                     if "[NOTES_BLOCK]" in ai_response and "[/NOTES_BLOCK]" in ai_response:
                         text_notes = ai_response.split("[NOTES_BLOCK]")[1].split("[/NOTES_BLOCK]")[0].strip()
@@ -264,27 +192,10 @@ else:
                     if "[QUESTIONS_BLOCK]" in ai_response and "[/QUESTIONS_BLOCK]" in ai_response:
                         text_qs = ai_response.split("[QUESTIONS_BLOCK]")[1].split("[/QUESTIONS_BLOCK]")[0].strip()
 
-                    if enable_diagrams:
-                        if "[FLOWCHART_BLOCK]" in ai_response and "[/FLOWCHART_BLOCK]" in ai_response:
-                            flow_part = ai_response.split("[FLOWCHART_BLOCK]")[1].split("[/FLOWCHART_BLOCK]")[0].strip()
-                            flow_part = flow_part.replace("```graphviz", "").replace("```dot", "").replace("```", "").strip()
-                        if "[METRICS_BLOCK]" in ai_response and "[/METRICS_BLOCK]" in ai_response:
-                            metric_string = ai_response.split("[METRICS_BLOCK]")[1].split("[/METRICS_BLOCK]")[0].strip()
-                            if "None" not in metric_string and ":" in metric_string:
-                                for pair in metric_string.split(","):
-                                    if ":" in pair:
-                                        lbl, val = pair.split(":", 1)
-                                        try:
-                                            metrics_list.append({"Label": lbl.strip(), "Value": float(val.strip().replace("%",""))})
-                                        except:
-                                            pass
-
                     st.session_state.history.append({
                         "title": source_title,
                         "notes": text_notes,
-                        "questions": text_qs,
-                        "flowchart": flow_part,
-                        "metrics": metrics_list
+                        "questions": text_qs
                     })
                     st.session_state.current_note = len(st.session_state.history) - 1
                     st.rerun()

@@ -1,8 +1,7 @@
 streamlit
 google-genai
+python-docx
 pypdf
-docx2txt
-pypdf2
 youtube-transcript-api
 streamlit-mic-recorder
 pandas

@@ -63,9 +63,9 @@ def call_llm_engine(prompt):
 
     raise RuntimeError(f"All Groq engine configurations failed: {str(last_error)}")
 
-# --- SECURE DATA EXTRACTION UTILITIES ---
+# --- FIXED DATA EXTRACTION UTILITIES ---
 def extract_youtube_transcript(url):
-    """Safely extracts transcript arrays or raises explicit errors."""
+    """Correctly calls the YouTube API statically to extract transcripts."""
     try:
         # Extract video ID handling standard and shortened URL shapes
         if "v=" in url:
@@ -75,9 +75,8 @@ def extract_youtube_transcript(url):
         else:
             video_id = url.split("/")[-1]
             
-        # Use explicit object instantiation to guarantee method mapping
-        api_client = YouTubeTranscriptApi()
-        transcript_list = api_client.get_transcript(video_id)
+        # FIX: Call statically directly on the class name as required by the library
+        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
         return " ".join([t['text'] for t in transcript_list])
     except Exception as e:
         raise RuntimeError(f"Could not download YouTube captions. Please verify subtitles are enabled on this video. Detail: {str(e)}")
@@ -195,7 +194,7 @@ else:
             else:
                 with st.spinner("🧠 Constructing study segments..."):
                     pipeline_prompt = f"""
-                    You are an academic processing agent. Analyze the source material text provided and construct comprehensive notes and a practice quiz sheet.
+                    Analyze the source material text provided and construct comprehensive notes and a practice quiz sheet.
                     
                     Return your response structured explicitly inside these two bracketed text blocks:
 

@@ -32,7 +32,7 @@ if "current_note" not in st.session_state:
 LOCAL_GROQ_KEY = "YOUR_GROQ_API_KEY_HERE"
 
 def call_llm_engine(prompt):
-    """Connects to the ultra-fast Groq API cloud engine."""
+    """Connects to the ultra-fast Groq API cloud engine using updated active models."""
     final_key = LOCAL_GROQ_KEY
     
     # Check Streamlit Cloud Secrets dashboard first
@@ -42,24 +42,31 @@ def call_llm_engine(prompt):
     if not final_key or "YOUR_" in final_key:
         raise ValueError("Missing API Key! Please paste your Groq API key into Streamlit Secrets or Line 30.")
         
-    try:
-        # Groq uses the standard OpenAI SDK client mapping format
-        client = OpenAI(
-            base_url="https://api.groq.com/openai/v1",
-            api_key=final_key
-        )
-        
-        response = client.chat.completions.create(
-            model="llama3-70b-8192",  # Blazing fast, highly accurate open model
-            messages=[
-                {"role": "system", "content": "You are an expert academic text-processing assistant."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        raise RuntimeError(f"LLM Engine Error: {str(e)}")
+    # We use a failover model list so if one model is busy or throttled, it moves to the next
+    available_models = ["llama-3.3-70b-versatile", "llama3-8b-8192", "mixtral-8x7b-32768"]
+    last_error = None
+
+    for model_name in available_models:
+        try:
+            client = OpenAI(
+                base_url="https://api.groq.com/openai/v1",
+                api_key=final_key
+            )
+            
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": "You are an expert academic text-processing assistant."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            last_error = e
+            continue  # If a model fails or is deprecated, try the next one down the line
+
+    raise RuntimeError(f"All Groq models failed. Status log: {str(last_error)}")
 
 # --- DATA EXTRACTION UTILITIES ---
 def extract_youtube_transcript(url):
@@ -170,47 +177,4 @@ else:
             source_title = uploaded_file.name
 
     if st.button("🚀 Generate Exam-Ready Notes"):
-        if not raw_text.strip():
-            st.error("❌ Please provide some input material first.")
-        else:
-            with st.spinner("🧠 Processing your structured segments..."):
-                try:
-                    pipeline_prompt = f"""
-                    Analyze the source text below and construct structured notes along with exam practice sheets.
-                    
-                    You must separate your response into these exact structural tag pairs:
-
-                    [NOTES_BLOCK]
-                    Generate comprehensive study notes structured strictly as '{note_format}' based on the source text. Do not include any questions inside this block.
-                    [/NOTES_BLOCK]
-
-                    [QUESTIONS_BLOCK]
-                    Generate exactly {num_questions} clear exam practice questions. Place the direct answer key text immediately beneath each generated question item.
-                    [/QUESTIONS_BLOCK]
-                    
-                    Source Material:
-                    {raw_text[:12000]}
-                    """
-                    
-                    ai_response = call_llm_engine(pipeline_prompt)
-                    st.balloons()
-                    
-                    text_notes = "No notes compiled."
-                    text_qs = "No questions compiled."
-                    
-                    if "[NOTES_BLOCK]" in ai_response and "[/NOTES_BLOCK]" in ai_response:
-                        text_notes = ai_response.split("[NOTES_BLOCK]")[1].split("[/NOTES_BLOCK]")[0].strip()
-                    
-                    if "[QUESTIONS_BLOCK]" in ai_response and "[/QUESTIONS_BLOCK]" in ai_response:
-                        text_qs = ai_response.split("[QUESTIONS_BLOCK]")[1].split("[/QUESTIONS_BLOCK]")[0].strip()
-
-                    st.session_state.history.append({
-                        "title": source_title,
-                        "notes": text_notes,
-                        "questions": text_qs
-                    })
-                    st.session_state.current_note = len(st.session_state.history) - 1
-                    st.rerun()
-                            
-                except Exception as e:
-                    st.error(f"Execution Error: {str(e)}")
+        if not raw_text.

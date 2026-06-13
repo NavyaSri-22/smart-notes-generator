@@ -4,9 +4,9 @@ import pandas as pd
 from pypdf import PdfReader
 from youtube_transcript_api import YouTubeTranscriptApi
 from streamlit_mic_recorder import speech_to_text
-import google.generativeai as genai
+from google import genai
 
-# --- CONFIGURATION & PREMIUM UI SETUP ---
+# --- CONFIGURATION & UI SETUP ---
 st.set_page_config(page_title="Smart Notes Engine", page_icon="📝", layout="wide")
 
 st.markdown("""
@@ -19,39 +19,54 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Initialize session states
 if "history" not in st.session_state:
     st.session_state.history = []  
-
 if "current_note" not in st.session_state:
     st.session_state.current_note = None
 
 # =========================================================================
-# 🔑 ENTER YOUR API KEY HERE
-# Put your real Gemini API key between the quotes below!
+# 🔑 LOCAL BACKUP KEY (Only used if Streamlit Cloud Secrets are empty)
 # =========================================================================
-MY_API_KEY = "YOUR_REAL_GEMINI_API_KEY_HERE"
+LOCAL_BACKUP_KEY = "YOUR_REAL_GEMINI_API_KEY_HERE"
 
-# --- ROTATING ENGINE EXECUTION FUNCTION ---
 def call_gemini_with_failover(prompt):
-    # Check if a key is provided in Streamlit Cloud Secrets first, otherwise use the variable above
-    final_key = MY_API_KEY
-    if "GEMINI_KEY_1" in st.secrets:
-        final_key = st.secrets["GEMINI_KEY_1"]
+    """Checks for working keys in Streamlit Cloud Secrets first, then local backups."""
+    valid_keys = []
+    
+    # 1. Look for rotated keys in your Streamlit dashboard secrets
+    for secret_name in ["GEMINI_KEY_1", "GEMINI_KEY_2", "GEMINI_KEY_3"]:
+        try:
+            if secret_name in st.secrets:
+                val = st.secrets[secret_name]
+                if val and len(val) > 10 and "YOUR_" not in val:
+                    valid_keys.append(val)
+        except:
+            pass
+            
+    # 2. Local fallback
+    if not valid_keys and LOCAL_BACKUP_KEY and "YOUR_" not in LOCAL_BACKUP_KEY:
+        valid_keys.append(LOCAL_BACKUP_KEY)
         
-    if not final_key or "YOUR_" in final_key:
-        raise ValueError("Missing API Key! Please paste your Gemini API key into the code on Line 31.")
-        
-    try:
-        # Standard configuration syntax that works everywhere
-        genai.configure(api_key=final_key)
-        model = genai.GenerativeModel('gemini-pro')  # Stable, reliable fallback model
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        raise RuntimeError(f"Gemini API Error: {str(e)}")
+    if not valid_keys:
+        raise ValueError("Missing API Keys! Please add GEMINI_KEY_1 to your Streamlit Secrets panel.")
+    
+    last_error = None
+    for current_key in valid_keys:
+        try:
+            # Using the official modern client syntax
+            client = genai.Client(api_key=current_key)
+            response = client.models.generate_content(
+                model='gemini-2.5-flash', 
+                contents=prompt
+            )
+            return response.text
+        except Exception as e:
+            last_error = e
+            continue
+            
+    raise RuntimeError(f"API Rate limit or quota hit. Details: {str(last_error)}")
 
-# --- DATA EXTRACTION UTILITIES ---
+# --- DATA EXTRACTION ---
 def extract_youtube_transcript(url):
     try:
         video_id = url.split("v=")[1].split("&")[0] if "v=" in url else (url.split("youtu.be/")[1].split("?")[0] if "youtu.be/" in url else url.split("/")[-1])
@@ -68,7 +83,7 @@ def extract_docx_text(file):
     doc = docx.Document(file)
     return "\n".join([para.text for para in doc.paragraphs])
 
-# --- SIDEBAR: NAVIGATION & HISTORY ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.title("📝 Smart Notes")
     if st.button("➕ Generate New Notes"):
@@ -87,44 +102,42 @@ with st.sidebar:
                 st.session_state.current_note = real_idx
                 st.rerun()
 
-# --- MAIN WORKSPACE MULTIPLEXER ---
+# --- WORKSPACE ---
 if st.session_state.current_note is not None and st.session_state.current_note < len(st.session_state.history):
     idx = st.session_state.current_note
     
     t_col1, t_col2 = st.columns([5, 1])
     with t_col1:
-        new_title = st.text_input("✏️ Notebook Title / Topic Name:", value=st.session_state.history[idx]['title'])
+        new_title = st.text_input("✏️ Notebook Title:", value=st.session_state.history[idx]['title'])
         st.session_state.history[idx]['title'] = new_title
     with t_col2:
         st.write("<br>", unsafe_allow_html=True)
-        if st.button("🗑️ Delete", key="delete_note_btn"):
+        if st.button("🗑️ Delete"):
             st.session_state.history.pop(idx)
             st.session_state.current_note = None
             st.rerun()
             
     st.markdown("---")
     
-    # --- DISPLAY PANELS (NOTES & QUESTIONS ISOLATED) ---
     st.markdown('<div class="content-block">', unsafe_allow_html=True)
     st.subheader("📝 Generated Study Content (Editable)")
-    edited_notes = st.text_area("Modify summaries text:", value=st.session_state.history[idx]['notes'], height=250, key="edit_notes_field")
+    edited_notes = st.text_area("Notes Summaries:", value=st.session_state.history[idx]['notes'], height=250, key="edit_notes")
     st.session_state.history[idx]['notes'] = edited_notes 
     st.markdown('</div>', unsafe_allow_html=True)
     
     st.markdown('<div class="content-block">', unsafe_allow_html=True)
     st.subheader("❓ Exam Practice Q&A (Editable)")
-    edited_qs = st.text_area("Modify test sheet questions:", value=st.session_state.history[idx]['questions'], height=250, key="edit_qs_field")
+    edited_qs = st.text_area("Practice Sheets:", value=st.session_state.history[idx]['questions'], height=250, key="edit_qs")
     st.session_state.history[idx]['questions'] = edited_qs 
     st.markdown('</div>', unsafe_allow_html=True)
 
 else:
-    # Home View
     st.title("✨ Smart Notes Generator")
-    st.caption("Transform any text, files, or your spoken voice into clean, structured notes blocks.")
+    st.caption("Convert files, audio, or articles into structured clean summary sections.")
 
     h_col1, h_col2 = st.columns(2)
     with h_col1:
-        note_format = st.selectbox("Preferred Output Format", ["Bullet Points", "Detailed Paragraphs", "Flashcards (Concept & Definition Pairs)"])
+        note_format = st.selectbox("Preferred Output Format", ["Bullet Points", "Detailed Paragraphs", "Flashcards"])
     with h_col2:
         num_questions = st.slider("Number of Exam Questions", 3, 10, 5)
 
@@ -139,7 +152,7 @@ else:
     elif input_type == "Voice Notes 🎙️":
         voice_input = speech_to_text(start_prompt="🎙️ Start Recording Voice", stop_prompt="⏹️ Stop & Transcribe", language='en', key='voice_recorder')
         if voice_input:
-            st.info(f"📋 **Transcribed:** {voice_input}")
+            st.info(f"📋 Transcribed: {voice_input}")
             raw_text = voice_input
             source_title = "Voice Dictation Summary"
     elif input_type == "YouTube Link":
@@ -163,7 +176,7 @@ else:
         if not raw_text.strip():
             st.error("❌ Please provide some input material first.")
         else:
-            with st.spinner("🧠 Processing your structured segments..."):
+            with st.spinner("🧠 Processing structured segments..."):
                 try:
                     pipeline_prompt = f"""
                     You are an academic systems assistant. Analyze the source text and split your response into explicit tag sections.
@@ -188,7 +201,6 @@ else:
                     
                     if "[NOTES_BLOCK]" in ai_response and "[/NOTES_BLOCK]" in ai_response:
                         text_notes = ai_response.split("[NOTES_BLOCK]")[1].split("[/NOTES_BLOCK]")[0].strip()
-                    
                     if "[QUESTIONS_BLOCK]" in ai_response and "[/QUESTIONS_BLOCK]" in ai_response:
                         text_qs = ai_response.split("[QUESTIONS_BLOCK]")[1].split("[/QUESTIONS_BLOCK]")[0].strip()
 

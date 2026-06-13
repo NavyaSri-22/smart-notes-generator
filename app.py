@@ -4,9 +4,9 @@ import pandas as pd
 from pypdf import PdfReader
 from youtube_transcript_api import YouTubeTranscriptApi
 from streamlit_mic_recorder import speech_to_text
-import google.generativeai as genai
+from openai import OpenAI
 
-# --- CONFIGURATION & PREMIUM UI SETUP ---
+# --- CONFIGURATION & UI SETUP ---
 st.set_page_config(page_title="Smart Notes Engine", page_icon="📝", layout="wide")
 
 st.markdown("""
@@ -22,50 +22,44 @@ st.markdown("""
 # Initialize session states
 if "history" not in st.session_state:
     st.session_state.history = []  
-
 if "current_note" not in st.session_state:
     st.session_state.current_note = None
 
 # =========================================================================
-# 🔑 LOCAL TESTING DEVELOPER KEY
-# If running locally, put a valid API key here. 
-# If running on Streamlit Cloud, leave this alone and use the Secrets panel!
+# 🔑 API KEY CONFIGURATION (GROQ PROVIDER)
+# Replace with your Groq API Key, or add GROQ_API_KEY to Streamlit Secrets
 # =========================================================================
-LOCAL_DEVELOPER_KEY = "YOUR_REAL_GEMINI_API_KEY_HERE"
+LOCAL_GROQ_KEY = "YOUR_GROQ_API_KEY_HERE"
 
-# --- ROTATING ENGINE EXECUTION FUNCTION ---
-def call_gemini_with_failover(prompt):
-    valid_keys = []
+def call_llm_engine(prompt):
+    """Connects to the ultra-fast Groq API cloud engine."""
+    final_key = LOCAL_GROQ_KEY
     
-    # 1. Gather any operational keys provided via the production Secrets cloud portal
-    for cloud_secret in ["GEMINI_KEY_1", "GEMINI_KEY_2", "GEMINI_KEY_3"]:
-        try:
-            if cloud_secret in st.secrets:
-                token = st.secrets[cloud_secret]
-                if token and len(token) > 10 and "YOUR_" not in token:
-                    valid_keys.append(token)
-        except:
-            pass
-            
-    # 2. Append local hardcoded key fallback if no cloud infrastructure environment variables exist
-    if not valid_keys and LOCAL_DEVELOPER_KEY and "YOUR_" not in LOCAL_DEVELOPER_KEY:
-        valid_keys.append(LOCAL_DEVELOPER_KEY)
+    # Check Streamlit Cloud Secrets dashboard first
+    if "GROQ_API_KEY" in st.secrets:
+        final_key = st.secrets["GROQ_API_KEY"]
         
-    if not valid_keys:
-        raise ValueError("Missing API Keys! Please configure GEMINI_KEY_1 in your Streamlit Cloud Secrets dashboard.")
-    
-    last_error = None
-    for current_key in valid_keys:
-        try:
-            genai.configure(api_key=current_key)
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            response = model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            last_error = e
-            continue
-            
-    raise RuntimeError(f"All keys exhausted or throttled by rate limits. Status log: {str(last_error)}")
+    if not final_key or "YOUR_" in final_key:
+        raise ValueError("Missing API Key! Please paste your Groq API key into Streamlit Secrets or Line 30.")
+        
+    try:
+        # Groq uses the standard OpenAI SDK client mapping format
+        client = OpenAI(
+            base_url="https://api.groq.com/openai/v1",
+            api_key=final_key
+        )
+        
+        response = client.chat.completions.create(
+            model="llama3-70b-8192",  # Blazing fast, highly accurate open model
+            messages=[
+                {"role": "system", "content": "You are an expert academic text-processing assistant."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        raise RuntimeError(f"LLM Engine Error: {str(e)}")
 
 # --- DATA EXTRACTION UTILITIES ---
 def extract_youtube_transcript(url):
@@ -123,7 +117,7 @@ if st.session_state.current_note is not None and st.session_state.current_note <
     # --- DISPLAY PANELS ---
     st.markdown('<div class="content-block">', unsafe_allow_html=True)
     st.subheader("📝 Generated Study Content (Editable)")
-    edited_notes = st.text_area("Notes text blocks:", value=st.session_state.history[idx]['notes'], height=250, key="edit_notes_field")
+    edited_notes = st.text_area("Notes block:", value=st.session_state.history[idx]['notes'], height=250, key="edit_notes_field")
     st.session_state.history[idx]['notes'] = edited_notes 
     st.markdown('</div>', unsafe_allow_html=True)
     
@@ -182,23 +176,23 @@ else:
             with st.spinner("🧠 Processing your structured segments..."):
                 try:
                     pipeline_prompt = f"""
-                    You are an expert academic systems assistant. Take the source material provided and construct structural notes along with exam practice sheets based entirely on the text contents.
+                    Analyze the source text below and construct structured notes along with exam practice sheets.
                     
-                    Return your response divided strictly into these two tagged blocks:
+                    You must separate your response into these exact structural tag pairs:
 
                     [NOTES_BLOCK]
-                    Generate comprehensive study notes structured strictly as '{note_format}'. Make sure it is deeply explanatory and clear. Do not include any test questions inside this block.
+                    Generate comprehensive study notes structured strictly as '{note_format}' based on the source text. Do not include any questions inside this block.
                     [/NOTES_BLOCK]
 
                     [QUESTIONS_BLOCK]
-                    Generate exactly {num_questions} clear exam practice questions. Place a highly direct, itemized answers key sheet directly underneath each question entry.
+                    Generate exactly {num_questions} clear exam practice questions. Place the direct answer key text immediately beneath each generated question item.
                     [/QUESTIONS_BLOCK]
                     
                     Source Material:
                     {raw_text[:12000]}
                     """
                     
-                    ai_response = call_gemini_with_failover(pipeline_prompt)
+                    ai_response = call_llm_engine(pipeline_prompt)
                     st.balloons()
                     
                     text_notes = "No notes compiled."

@@ -27,23 +27,19 @@ if "current_note" not in st.session_state:
 
 # =========================================================================
 # 🔑 API KEY CONFIGURATION (GROQ PROVIDER)
-# Replace with your Groq API Key, or add GROQ_API_KEY to Streamlit Secrets
 # =========================================================================
 LOCAL_GROQ_KEY = "YOUR_GROQ_API_KEY_HERE"
 
 def call_llm_engine(prompt):
-    """Connects to the ultra-fast Groq API cloud engine using updated active models."""
+    """Connects to Groq cloud API using active Llama 3 models."""
     final_key = LOCAL_GROQ_KEY
-    
-    # Check Streamlit Cloud Secrets dashboard first
     if "GROQ_API_KEY" in st.secrets:
         final_key = st.secrets["GROQ_API_KEY"]
         
     if not final_key or "YOUR_" in final_key:
-        raise ValueError("Missing API Key! Please paste your Groq API key into Streamlit Secrets or Line 30.")
+        raise ValueError("Missing API Key! Set GROQ_API_KEY in your Secrets dashboard.")
         
-    # We use a failover model list so if one model is busy or throttled, it moves to the next
-    available_models = ["llama-3.3-70b-versatile", "llama3-8b-8192", "mixtral-8x7b-32768"]
+    available_models = ["llama-3.3-70b-versatile", "llama3-8b-8192"]
     last_error = None
 
     for model_name in available_models:
@@ -52,40 +48,58 @@ def call_llm_engine(prompt):
                 base_url="https://api.groq.com/openai/v1",
                 api_key=final_key
             )
-            
             response = client.chat.completions.create(
                 model=model_name,
                 messages=[
-                    {"role": "system", "content": "You are an expert academic text-processing assistant."},
+                    {"role": "system", "content": "You are a precise academic text-processing machine. Follow bracket structural tagging instructions exactly."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.3
+                temperature=0.2
             )
             return response.choices[0].message.content
         except Exception as e:
             last_error = e
-            continue  # If a model fails or is deprecated, try the next one down the line
+            continue
 
-    raise RuntimeError(f"All Groq models failed. Status log: {str(last_error)}")
+    raise RuntimeError(f"All Groq engine configurations failed: {str(last_error)}")
 
-# --- DATA EXTRACTION UTILITIES ---
+# --- SECURE DATA EXTRACTION UTILITIES ---
 def extract_youtube_transcript(url):
+    """Safely extracts transcript arrays or raises explicit errors."""
     try:
-        video_id = url.split("v=")[1].split("&")[0] if "v=" in url else (url.split("youtu.be/")[1].split("?")[0] if "youtu.be/" in url else url.split("/")[-1])
-        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+        # Extract video ID handling standard and shortened URL shapes
+        if "v=" in url:
+            video_id = url.split("v=")[1].split("&")[0]
+        elif "youtu.be/" in url:
+            video_id = url.split("youtu.be/")[1].split("?")[0]
+        else:
+            video_id = url.split("/")[-1]
+            
+        # Use explicit object instantiation to guarantee method mapping
+        api_client = YouTubeTranscriptApi()
+        transcript_list = api_client.get_transcript(video_id)
         return " ".join([t['text'] for t in transcript_list])
     except Exception as e:
-        return f"Error extracting YouTube transcript: {str(e)}"
+        raise RuntimeError(f"Could not download YouTube captions. Please verify subtitles are enabled on this video. Detail: {str(e)}")
 
 def extract_pdf_text(file):
-    reader = PdfReader(file)
-    return "".join([page.extract_text() + "\n" for page in reader.pages])
+    try:
+        reader = PdfReader(file)
+        text = "".join([page.extract_text() + "\n" for page in reader.pages])
+        if not text.strip():
+            raise ValueError("The uploaded PDF appears to be empty or an un-scanned image.")
+        return text
+    except Exception as e:
+        raise RuntimeError(f"PDF Parsing Failed: {str(e)}")
 
 def extract_docx_text(file):
-    doc = docx.Document(file)
-    return "\n".join([para.text for para in doc.paragraphs])
+    try:
+        doc = docx.Document(file)
+        return "\n".join([para.text for para in doc.paragraphs])
+    except Exception as e:
+        raise RuntimeError(f"Word Document Parsing Failed: {str(e)}")
 
-# --- SIDEBAR: NAVIGATION & HISTORY ---
+# --- SIDEBAR NAVIGATION ---
 with st.sidebar:
     st.title("📝 Smart Notes")
     if st.button("➕ Generate New Notes"):
@@ -104,7 +118,7 @@ with st.sidebar:
                 st.session_state.current_note = real_idx
                 st.rerun()
 
-# --- MAIN WORKSPACE MULTIPLEXER ---
+# --- WORKSPACE ---
 if st.session_state.current_note is not None and st.session_state.current_note < len(st.session_state.history):
     idx = st.session_state.current_note
     
@@ -121,7 +135,6 @@ if st.session_state.current_note is not None and st.session_state.current_note <
             
     st.markdown("---")
     
-    # --- DISPLAY PANELS ---
     st.markdown('<div class="content-block">', unsafe_allow_html=True)
     st.subheader("📝 Generated Study Content (Editable)")
     edited_notes = st.text_area("Notes block:", value=st.session_state.history[idx]['notes'], height=250, key="edit_notes_field")
@@ -135,7 +148,6 @@ if st.session_state.current_note is not None and st.session_state.current_note <
     st.markdown('</div>', unsafe_allow_html=True)
 
 else:
-    # Home View
     st.title("✨ Smart Notes Generator")
     st.caption("Transform any text, files, or your spoken voice into clean, structured notes blocks.")
 
@@ -150,49 +162,49 @@ else:
     raw_text = ""
     source_title = "Untitled Summary"
 
-    if input_type == "Raw Text":
-        raw_text = st.text_area("Paste material here:", height=150)
-        source_title = "Text Snippet" if len(raw_text) > 0 else "Untitled"
-    elif input_type == "Voice Notes 🎙️":
-        voice_input = speech_to_text(start_prompt="🎙️ Start Recording Voice", stop_prompt="⏹️ Stop & Transcribe", language='en', key='voice_recorder')
-        if voice_input:
-            st.info(f"📋 **Transcribed:** {voice_input}")
-            raw_text = voice_input
-            source_title = "Voice Dictation Summary"
-    elif input_type == "YouTube Link":
-        url = st.text_input("Paste YouTube Video URL:")
-        if url:
-            with st.spinner("Extracting..."):
-                raw_text = extract_youtube_transcript(url)
-                source_title = "YouTube Video Summary"
-    elif input_type == "PDF Document":
-        uploaded_file = st.file_uploader("Upload PDF", type=["pdf"])
-        if uploaded_file:
-            raw_text = extract_pdf_text(uploaded_file)
-            source_title = uploaded_file.name
-    elif input_type == "Word Document (.docx)":
-        uploaded_file = st.file_uploader("Upload Word Document", type=["docx"])
-        if uploaded_file:
-            raw_text = extract_docx_text(uploaded_file)
-            source_title = uploaded_file.name
+    try:
+        if input_type == "Raw Text":
+            raw_text = st.text_area("Paste material here:", height=150)
+            source_title = "Text Snippet" if len(raw_text) > 0 else "Untitled"
+        elif input_type == "Voice Notes 🎙️":
+            voice_input = speech_to_text(start_prompt="🎙️ Start Recording Voice", stop_prompt="⏹️ Stop & Transcribe", language='en', key='voice_recorder')
+            if voice_input:
+                st.info(f"📋 **Transcribed:** {voice_input}")
+                raw_text = voice_input
+                source_title = "Voice Dictation Summary"
+        elif input_type == "YouTube Link":
+            url = st.text_input("Paste YouTube Video URL:")
+            if url:
+                with st.spinner("Fetching transcript components..."):
+                    raw_text = extract_youtube_transcript(url)
+                    source_title = "YouTube Video Summary"
+        elif input_type == "PDF Document":
+            uploaded_file = st.file_uploader("Upload PDF", type=["pdf"])
+            if uploaded_file:
+                raw_text = extract_pdf_text(uploaded_file)
+                source_title = uploaded_file.name
+        elif input_type == "Word Document (.docx)":
+            uploaded_file = st.file_uploader("Upload Word Document", type=["docx"])
+            if uploaded_file:
+                raw_text = extract_docx_text(uploaded_file)
+                source_title = uploaded_file.name
 
-    if st.button("🚀 Generate Exam-Ready Notes"):
-        if not raw_text.strip():
-            st.error("❌ Please provide some input material first.")
-        else:
-            with st.spinner("🧠 Processing your structured segments..."):
-                try:
+        if st.button("🚀 Generate Exam-Ready Notes"):
+            if not raw_text or not raw_text.strip():
+                st.error("❌ Source content container is completely empty. Provide valid input material.")
+            else:
+                with st.spinner("🧠 Constructing study segments..."):
                     pipeline_prompt = f"""
-                    Analyze the source text below and construct structured notes along with exam practice sheets.
+                    You are an academic processing agent. Analyze the source material text provided and construct comprehensive notes and a practice quiz sheet.
                     
-                    You must separate your response into these exact structural tag pairs:
+                    Return your response structured explicitly inside these two bracketed text blocks:
 
                     [NOTES_BLOCK]
                     Generate comprehensive study notes structured strictly as '{note_format}' based on the source text. Do not include any questions inside this block.
                     [/NOTES_BLOCK]
 
                     [QUESTIONS_BLOCK]
-                    Generate exactly {num_questions} clear exam practice questions. Place the direct answer key text immediately beneath each generated question item.
+                    Generate exactly {num_questions} clear exam practice questions based on the text. Place a clear, itemized answer key sheet immediately beneath each question item.
                     [/QUESTIONS_BLOCK]
                     
                     Source Material:
@@ -202,14 +214,18 @@ else:
                     ai_response = call_llm_engine(pipeline_prompt)
                     st.balloons()
                     
-                    text_notes = "No notes compiled."
-                    text_qs = "No questions compiled."
+                    text_notes = "Processing error: Could not compile structural notes block cleanly."
+                    text_qs = "Processing error: Could not compile practice sheets block cleanly."
                     
                     if "[NOTES_BLOCK]" in ai_response and "[/NOTES_BLOCK]" in ai_response:
                         text_notes = ai_response.split("[NOTES_BLOCK]")[1].split("[/NOTES_BLOCK]")[0].strip()
+                    elif "[NOTES_BLOCK]" in ai_response:
+                        text_notes = ai_response.split("[NOTES_BLOCK]")[1].split("[QUESTIONS_BLOCK]")[0].replace("[/NOTES_BLOCK]", "").strip()
                     
                     if "[QUESTIONS_BLOCK]" in ai_response and "[/QUESTIONS_BLOCK]" in ai_response:
                         text_qs = ai_response.split("[QUESTIONS_BLOCK]")[1].split("[/QUESTIONS_BLOCK]")[0].strip()
+                    elif "[QUESTIONS_BLOCK]" in ai_response:
+                        text_qs = ai_response.split("[QUESTIONS_BLOCK]")[1].strip()
 
                     st.session_state.history.append({
                         "title": source_title,
@@ -218,6 +234,6 @@ else:
                     })
                     st.session_state.current_note = len(st.session_state.history) - 1
                     st.rerun()
-                            
-                except Exception as e:
-                    st.error(f"Execution Error: {str(e)}")
+                    
+    except Exception as runtime_error:
+        st.error(f"⚠️ {str(runtime_error)}")

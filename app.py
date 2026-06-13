@@ -177,4 +177,47 @@ else:
             source_title = uploaded_file.name
 
     if st.button("🚀 Generate Exam-Ready Notes"):
-        if not raw_text.
+        if not raw_text.strip():
+            st.error("❌ Please provide some input material first.")
+        else:
+            with st.spinner("🧠 Processing your structured segments..."):
+                try:
+                    pipeline_prompt = f"""
+                    Analyze the source text below and construct structured notes along with exam practice sheets.
+                    
+                    You must separate your response into these exact structural tag pairs:
+
+                    [NOTES_BLOCK]
+                    Generate comprehensive study notes structured strictly as '{note_format}' based on the source text. Do not include any questions inside this block.
+                    [/NOTES_BLOCK]
+
+                    [QUESTIONS_BLOCK]
+                    Generate exactly {num_questions} clear exam practice questions. Place the direct answer key text immediately beneath each generated question item.
+                    [/QUESTIONS_BLOCK]
+                    
+                    Source Material:
+                    {raw_text[:12000]}
+                    """
+                    
+                    ai_response = call_llm_engine(pipeline_prompt)
+                    st.balloons()
+                    
+                    text_notes = "No notes compiled."
+                    text_qs = "No questions compiled."
+                    
+                    if "[NOTES_BLOCK]" in ai_response and "[/NOTES_BLOCK]" in ai_response:
+                        text_notes = ai_response.split("[NOTES_BLOCK]")[1].split("[/NOTES_BLOCK]")[0].strip()
+                    
+                    if "[QUESTIONS_BLOCK]" in ai_response and "[/QUESTIONS_BLOCK]" in ai_response:
+                        text_qs = ai_response.split("[QUESTIONS_BLOCK]")[1].split("[/QUESTIONS_BLOCK]")[0].strip()
+
+                    st.session_state.history.append({
+                        "title": source_title,
+                        "notes": text_notes,
+                        "questions": text_qs
+                    })
+                    st.session_state.current_note = len(st.session_state.history) - 1
+                    st.rerun()
+                            
+                except Exception as e:
+                    st.error(f"Execution Error: {str(e)}")
